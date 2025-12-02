@@ -1,0 +1,55 @@
+{
+    "name": "obscuro",
+    "displayName": "Obscuro",
+    "description": "Securely encrypt and decrypt folders and files.",
+    "icon": "icon.png",
+    "version": "0.0.1",
+    "engines": {
+        "vscode": "^1.80.0"
+    },
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "obscuro.obscure",
+                "title": "Obscure (Encrypt)"
+            },
+            {
+                "command": "obscuro.reveal",
+                "title": "Reveal (Decrypt)"
+            }
+        ],
+        "menus": {
+            "explorer/context": [
+                {
+                    "command": "obscuro.obscure",
+                    "group": "modification",
+                    "when": "resourceScheme == file && resourceExtname != .obscuro"
+                },
+                {
+                    "command": "obscuro.reveal",
+                    "group": "modification",
+                    "when": "resourceScheme == file && resourceExtname == .obscuro"
+                }
+            ]
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./"
+    },
+    "devDependencies": {
+        "@types/node": "^24.10.1",
+        "@types/tar": "^6.1.13",
+        "@types/vscode": "^1.80.0",
+        "typescript": "^5.0.0"
+    },
+    "dependencies": {
+        "tar": "^7.5.2"
+    }
+}
