@@ -2,8 +2,13 @@
     "name": "obscuro",
     "displayName": "Obscuro",
     "description": "Securely encrypt and decrypt folders and files.",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/shalom/obscuro.git"
+    },
     "icon": "icon.png",
-    "version": "0.0.1",
+    "version": "2.0.0",
+    "publisher": "ShalomP",
     "engines": {
         "vscode": "^1.80.0"
     },

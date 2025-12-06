@@ -1,0 +1,10 @@
+.vscode/**
+.vscode-test/**
+src/**
+.gitignore
+.yarnrc
+vsc-extension-quickstart.md
+**/*.map
+**/*.ts
+.venv/**
+obscuro_build_*/**
