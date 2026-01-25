@@ -7,6 +7,9 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const tar = require("tar");
+const stream_1 = require("stream");
+const util_1 = require("util");
+const pipelineAsync = (0, util_1.promisify)(stream_1.pipeline);
 let outputChannel;
 function activate(context) {
     console.log('Obscuro extension is now active!');
@@ -435,27 +438,40 @@ setup(
             // Fallback to normal encryption of the source file
         }
     }
-    // 1. Create tarball in memory
-    // Note: For very large folders, streams would be better, but buffering is simpler for now.
-    // We will use a temporary file for the tarball to avoid memory issues with large files.
+    // 1. Create tarball (temp file)
     const tempTarPath = path.join(path.dirname(targetPath), `.temp_${Date.now()}.tar`);
     try {
         await tar.c({
             file: tempTarPath,
             cwd: path.dirname(fileToEncrypt),
         }, [path.basename(fileToEncrypt)]);
-        const tarBuffer = await fs.promises.readFile(tempTarPath);
-        // 2. Encrypt
+        // 2. Encrypt using streams
         const salt = crypto.randomBytes(16);
         const iv = crypto.randomBytes(12); // GCM standard IV size
-        const key = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
+        // Use async pbkdf2 to avoid blocking the event loop
+        const key = await new Promise((resolve, reject) => crypto.pbkdf2(password, salt, 100000, 32, 'sha256', (err, k) => err ? reject(err) : resolve(k)));
         const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-        const encrypted = Buffer.concat([cipher.update(tarBuffer), cipher.final()]);
-        const tag = cipher.getAuthTag();
+        const outputFilename = `${targetPath}.obscuro`;
+        const readStream = fs.createReadStream(tempTarPath);
+        const writeStream = fs.createWriteStream(outputFilename);
         // Format: Salt(16) + IV(12) + Tag(16) + EncryptedData
-        const outputFilename = `${targetPath}.obscuro`; // Keep original name + .obscuro
-        const outputBuffer = Buffer.concat([salt, iv, tag, encrypted]);
-        await fs.promises.writeFile(outputFilename, outputBuffer);
+        // Write header placeholder: Salt + IV + Empty Tag
+        const header = Buffer.concat([salt, iv, Buffer.alloc(16)]);
+        if (!writeStream.write(header)) {
+            await new Promise(resolve => writeStream.once('drain', () => resolve(undefined)));
+        }
+        // Pipe streams
+        await pipelineAsync(readStream, cipher, writeStream);
+        // Write the Auth Tag at the correct position
+        const tag = cipher.getAuthTag();
+        const fd = await fs.promises.open(outputFilename, 'r+');
+        try {
+            // Write tag at offset 28 (16 + 12)
+            await fd.write(tag, 0, 16, 28);
+        }
+        finally {
+            await fd.close();
+        }
         // 3. Cleanup
         await fs.promises.unlink(tempTarPath);
         // Secure delete original
@@ -488,25 +504,26 @@ setup(
     }
 }
 async function decryptTarget(filePath, password) {
-    const fileBuffer = await fs.promises.readFile(filePath);
-    // Extract parts
-    // Format: Salt(16) + IV(12) + Tag(16) + EncryptedData
-    if (fileBuffer.length < 44) {
+    // Read header (Salt + IV + Tag) = 44 bytes
+    const fd = await fs.promises.open(filePath, 'r');
+    const header = Buffer.alloc(44);
+    const { bytesRead } = await fd.read(header, 0, 44, 0);
+    await fd.close();
+    if (bytesRead < 44) {
         throw new Error("File is too short to be a valid Obscuro file.");
     }
-    const salt = fileBuffer.subarray(0, 16);
-    const iv = fileBuffer.subarray(16, 28);
-    const tag = fileBuffer.subarray(28, 44);
-    const encryptedData = fileBuffer.subarray(44);
-    const key = crypto.pbkdf2Sync(password, salt, 100000, 32, 'sha256');
+    const salt = header.subarray(0, 16);
+    const iv = header.subarray(16, 28);
+    const tag = header.subarray(28, 44);
+    const key = await new Promise((resolve, reject) => crypto.pbkdf2(password, salt, 100000, 32, 'sha256', (err, k) => err ? reject(err) : resolve(k)));
     const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
     decipher.setAuthTag(tag);
-    const decrypted = Buffer.concat([decipher.update(encryptedData), decipher.final()]);
-    // Extract tarball
     const outputDir = path.dirname(filePath);
     const tempTarPath = path.join(outputDir, `.temp_decrypt_${Date.now()}.tar`);
     try {
-        await fs.promises.writeFile(tempTarPath, decrypted);
+        const readStream = fs.createReadStream(filePath, { start: 44 });
+        const writeStream = fs.createWriteStream(tempTarPath);
+        await pipelineAsync(readStream, decipher, writeStream);
         await tar.x({
             file: tempTarPath,
             cwd: outputDir
