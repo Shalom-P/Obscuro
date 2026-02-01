@@ -7,8 +7,9 @@
         "url": "https://github.com/shalom/obscuro.git"
     },
     "icon": "icon.png",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "publisher": "ShalomP",
+    "license": "MIT",
     "engines": {
         "vscode": "^1.80.0"
     },
@@ -26,6 +27,14 @@
             {
                 "command": "obscuro.reveal",
                 "title": "Reveal (Decrypt)"
+            },
+            {
+                "command": "obscuro.encryptSelection",
+                "title": "Obscuro: Encrypt Selection"
+            },
+            {
+                "command": "obscuro.decryptSelection",
+                "title": "Obscuro: Decrypt Selection"
             }
         ],
         "menus": {
@@ -39,6 +48,18 @@
                     "command": "obscuro.reveal",
                     "group": "modification",
                     "when": "resourceScheme == file && resourceExtname == .obscuro"
+                }
+            ],
+            "editor/context": [
+                {
+                    "command": "obscuro.encryptSelection",
+                    "group": "obscuro",
+                    "when": "editorHasSelection"
+                },
+                {
+                    "command": "obscuro.decryptSelection",
+                    "group": "obscuro",
+                    "when": "editorHasSelection"
                 }
             ]
         }
