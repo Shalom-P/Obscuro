@@ -1,10 +1,10 @@
 import * as crypto from 'crypto';
 
 /**
- * Encrypts a string using AES-256-GCM.
+ * Encrypts data (string or Buffer) using AES-256-GCM.
  * Format: OBSCURO:<base64(salt + iv + tag + ciphertext)>
  */
-export async function encryptString(text: string, password: string): Promise<string> {
+export async function encryptData(data: string | Buffer, password: string): Promise<string> {
     const salt = crypto.randomBytes(16);
     const iv = crypto.randomBytes(12);
 
@@ -13,8 +13,15 @@ export async function encryptString(text: string, password: string): Promise<str
     );
 
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-    let encrypted = cipher.update(text, 'utf8');
-    encrypted = Buffer.concat([encrypted, cipher.final()]);
+
+    // Accept string or Buffer
+    let encrypted: Buffer;
+    if (typeof data === 'string') {
+        encrypted = Buffer.concat([cipher.update(data, 'utf8'), cipher.final()]);
+    } else {
+        encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
+    }
+
     const tag = cipher.getAuthTag();
 
     // Combine: Salt(16) + IV(12) + Tag(16) + Ciphertext
@@ -23,9 +30,9 @@ export async function encryptString(text: string, password: string): Promise<str
 }
 
 /**
- * Decrypts an OBSCURO string.
+ * Decrypts an OBSCURO string and returns Buffer.
  */
-export async function decryptString(encryptedString: string, password: string): Promise<string> {
+export async function decryptData(encryptedString: string, password: string): Promise<Buffer> {
     if (!encryptedString.startsWith('OBSCURO:')) {
         throw new Error("Invalid format. String must start with 'OBSCURO:'.");
     }
@@ -52,5 +59,20 @@ export async function decryptString(encryptedString: string, password: string): 
     let decrypted = decipher.update(ciphertext);
     decrypted = Buffer.concat([decrypted, decipher.final()]);
 
-    return decrypted.toString('utf8');
+    return decrypted;
+}
+
+/**
+ * Helper to decrypt and return string (for backward compatibility or text files).
+ */
+export async function decryptString(encryptedString: string, password: string): Promise<string> {
+    const buffer = await decryptData(encryptedString, password);
+    return buffer.toString('utf8');
+}
+
+/**
+ * Helper to encrypt string (wrapper for consistency).
+ */
+export async function encryptString(text: string, password: string): Promise<string> {
+    return encryptData(text, password);
 }

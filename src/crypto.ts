@@ -4,11 +4,11 @@ import * as crypto from 'crypto';
 import * as tar from 'tar';
 import { pipeline } from 'stream';
 import { promisify } from 'util';
-import { Logger } from './utils';
+import { ILogger } from './types';
 
 const pipelineAsync = promisify(pipeline);
 
-export async function encryptFile(targetPath: string, sourceFile: string, password: string, logger: Logger) {
+export async function encryptFile(targetPath: string, sourceFile: string, password: string, logger: ILogger, options: { keepOriginal?: boolean } = {}) {
     logger.log(`Starting encryption for ${targetPath}`);
     logger.show();
 
@@ -59,8 +59,8 @@ export async function encryptFile(targetPath: string, sourceFile: string, passwo
         // 3. Cleanup
         await fs.promises.unlink(tempTarPath);
 
-        // Secure delete original
-        if (fs.existsSync(targetPath)) {
+        // Secure delete original ONLY if keepOriginal is false (default)
+        if (!options.keepOriginal && fs.existsSync(targetPath)) {
             if (fs.statSync(targetPath).isDirectory()) {
                 fs.rmSync(targetPath, { recursive: true, force: true });
             } else {
@@ -82,7 +82,7 @@ export async function encryptFile(targetPath: string, sourceFile: string, passwo
     }
 }
 
-export async function decryptFile(filePath: string, password: string, logger: Logger, cleanupCallback?: (originalPath: string) => void) {
+export async function decryptFile(filePath: string, password: string, logger: ILogger, cleanupCallback?: (originalPath: string) => void) {
     // Read header (Salt + IV + Tag) = 44 bytes
     const fd = await fs.promises.open(filePath, 'r');
     const header = Buffer.alloc(44);

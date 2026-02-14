@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
+import { ILogger } from './types';
 
-export class Logger {
+export class Logger implements ILogger {
     private channel: vscode.OutputChannel;
 
     constructor(channel: vscode.OutputChannel) {

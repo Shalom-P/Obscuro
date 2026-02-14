@@ -7,7 +7,7 @@
         "url": "https://github.com/shalom/obscuro.git"
     },
     "icon": "icon.png",
-    "version": "2.1.0",
+    "version": "2.2.2",
     "publisher": "ShalomP",
     "license": "MIT",
     "engines": {
@@ -16,7 +16,9 @@
     "categories": [
         "Other"
     ],
-    "activationEvents": [],
+    "activationEvents": [
+        "workspaceContains:**/*.obscuro-lock"
+    ],
     "main": "./out/extension.js",
     "contributes": {
         "commands": [
@@ -35,6 +37,14 @@
             {
                 "command": "obscuro.decryptSelection",
                 "title": "Obscuro: Decrypt Selection"
+            },
+            {
+                "command": "obscuro.makeReadOnly",
+                "title": "Obscuro: Lock Item (Read-Only)"
+            },
+            {
+                "command": "obscuro.makeWritable",
+                "title": "Obscuro: Unlock Item (Writeable)"
             }
         ],
         "menus": {
@@ -42,12 +52,22 @@
                 {
                     "command": "obscuro.obscure",
                     "group": "modification",
-                    "when": "resourceScheme == file && resourceExtname != .obscuro"
+                    "when": "resourceScheme == file && resourceExtname != .obscuro && resourceExtname != .obscuro-lock"
                 },
                 {
                     "command": "obscuro.reveal",
                     "group": "modification",
                     "when": "resourceScheme == file && resourceExtname == .obscuro"
+                },
+                {
+                    "command": "obscuro.makeReadOnly",
+                    "group": "modification",
+                    "when": "resourceScheme == file && resourceExtname != .obscuro && resourceExtname != .obscuro-lock"
+                },
+                {
+                    "command": "obscuro.makeWritable",
+                    "group": "modification",
+                    "when": "resourceScheme == file && resourceExtname != .obscuro-lock"
                 }
             ],
             "editor/context": [
@@ -60,6 +80,16 @@
                     "command": "obscuro.decryptSelection",
                     "group": "obscuro",
                     "when": "editorHasSelection"
+                },
+                {
+                    "command": "obscuro.makeReadOnly",
+                    "group": "obscuro",
+                    "when": "resourceScheme == file"
+                },
+                {
+                    "command": "obscuro.makeWritable",
+                    "group": "obscuro",
+                    "when": "resourceScheme == file"
                 }
             ]
         }
