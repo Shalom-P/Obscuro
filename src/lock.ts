@@ -124,20 +124,12 @@ export async function lockFile(targetPath: string, password: string, logger: ILo
 
         } else {
             // Plaintext Lock: We don't change content.
-            // But we can't really "stream encrypt" a directory in place for Plaintext Lock?
-            // "Plaintext Lock" for directory is weird. 
-            // In original code, it seemed to force encryption for directories.
-            // Let's keep that logic: Force encrypt for directories.
             if (isDirectory) {
-                logger.log("  Directory detected. Forcing encryption for directory lock.");
-                // Recursive call with encrypt=true logic? OR just fall through
-                options.encrypt = true;
-
-                const output = fs.createWriteStream(tempEncryptedPath);
-                const tarStream = tar.c({ cwd: targetDir, gzip: false }, [targetName]);
-                await import('./crypto_string').then(m => m.encryptStream(tarStream as unknown as NodeJS.ReadableStream, output, password));
-
-                finalHash = await calculateFileHash(tempEncryptedPath);
+                logger.log("  Directory detected. Making folder and its contents read-only recursively.");
+                await setReadOnlyRecursive(targetPath, logger);
+                // Creating a hash for a directory is complex (requires combining hashes of all files)
+                // We'll skip hash for plain directory lock to keep things fast, relying on file permissions instead.
+                finalHash = "DIR_NO_HASH";
             } else {
                 // Plaintext File:
                 // Just hash the current file
@@ -159,7 +151,7 @@ export async function lockFile(targetPath: string, password: string, logger: ILo
         if (options.encrypt) {
             // Replace original with encrypted
             if (isDirectory) {
-                await fs.promises.rm(targetPath, { recursive: true, force: true });
+                await forceRemove(targetPath);
             }
             await fs.promises.rename(tempEncryptedPath, targetPath);
         } else {
@@ -170,8 +162,10 @@ export async function lockFile(targetPath: string, password: string, logger: ILo
         await fs.promises.writeFile(lockFilePath, encryptedMetadata, 'utf8');
 
         // 7. Permission Flags
-        await execAsync(`chmod a-w "${targetPath}"`);
-        await execAsync(`chflags uchg "${targetPath}"`);
+        if (!isDirectory || options.encrypt) {
+            await execAsync(`chmod a-w "${targetPath}"`).catch(e => logger.log(`Warning: Failed to set chmod: ${e.message}`));
+            await execAsync(`chflags uchg "${targetPath}"`).catch(e => logger.log(`Warning: Failed to set chflags: ${e.message}`));
+        }
         logger.log(`Item locked & encrypted successfully: ${targetPath}`);
 
     } catch (error: any) {
@@ -222,10 +216,10 @@ export async function unlockFile(targetPath: string, password: string, logger: I
 
     // 3. Remove Flags
     try {
-        await execAsync(`chflags nouchg "${targetPath}"`);
-        await execAsync(`chmod u+w "${targetPath}"`);
+        await execAsync(`chflags nouchg "${targetPath}"`).catch(() => { }); // might not exist on all OS
+        await execAsync(`chmod u+w "${targetPath}"`).catch(() => { });
     } catch (error: any) {
-        throw new Error(`Failed to remove read-only flag: ${error.message}`);
+        logger.log(`Warning: Failed to remove read-only flag: ${error.message}`);
     }
 
     // 4. Decrypt Content
@@ -330,3 +324,47 @@ async function calculateFileHash(filePath: string): Promise<string> {
     });
 }
 
+async function forceRemove(targetPath: string) {
+    try {
+        await fs.promises.rm(targetPath, { recursive: true, force: true });
+    } catch (err: any) {
+        if (err.code === 'EACCES' || err.code === 'EPERM') {
+            await ensureWritable(targetPath);
+            await fs.promises.rm(targetPath, { recursive: true, force: true });
+        } else {
+            throw err;
+        }
+    }
+}
+
+async function ensureWritable(target: string) {
+    try {
+        await fs.promises.chmod(target, 0o777).catch(() => { });
+        await execAsync(`chflags nouchg "${target}"`).catch(() => { });
+        const stats = await fs.promises.stat(target);
+        if (stats.isDirectory()) {
+            const files = await fs.promises.readdir(target);
+            for (const file of files) {
+                await ensureWritable(path.join(target, file));
+            }
+        }
+    } catch (e) {
+        // Ignore
+    }
+}
+
+async function setReadOnlyRecursive(target: string, logger: ILogger) {
+    try {
+        const stats = await fs.promises.stat(target);
+        if (stats.isDirectory()) {
+            const files = await fs.promises.readdir(target);
+            for (const file of files) {
+                await setReadOnlyRecursive(path.join(target, file), logger);
+            }
+        }
+        await execAsync(`chmod a-w "${target}"`).catch(e => logger.log(`Warning: Failed to set chmod on ${target}: ${e.message}`));
+        await execAsync(`chflags uchg "${target}"`).catch(e => logger.log(`Warning: Failed to set chflags on ${target}: ${e.message}`));
+    } catch (e: any) {
+        logger.log(`Failed to make ${target} read-only: ${e.message}`);
+    }
+}

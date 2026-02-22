@@ -7,7 +7,7 @@
         "url": "https://github.com/shalom/obscuro.git"
     },
     "icon": "icon.png",
-    "version": "2.2.4",
+    "version": "2.2.6",
     "publisher": "ShalomP",
     "license": "MIT",
     "engines": {

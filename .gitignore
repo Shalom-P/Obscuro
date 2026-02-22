@@ -4,3 +4,5 @@ node_modules/
 *.vsix
 .DS_Store
 .temp_*.tar
+test-TypeScript-repo/
+test-TypeScript-repo.obscuro-lock
