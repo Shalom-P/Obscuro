@@ -77,26 +77,28 @@ export function activate(context: vscode.ExtensionContext) {
     // Enforce Lock on Edit (Strict Read-Only)
     context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async e => {
         const docPath = e.document.uri.fsPath;
-        const lockFilePath = `${docPath}.obscuro-lock`;
+        const lockInfo = await findAssociatedLockFile(docPath);
 
-        if (fs.existsSync(lockFilePath)) {
-            // File is locked. Revert change immediately.
+        if (lockInfo) {
+            const { targetPath, lockFilePath } = lockInfo;
+            // File or parent folder is locked. Revert change immediately.
             await vscode.commands.executeCommand('undo');
 
-            // Check if we already prompted recently? (To avoid spamming prompts on every keystroke that is undone)
-            // For now, just prompt.
+            const targetName = path.basename(targetPath);
+            const isFolderLock = targetPath !== docPath;
+
             const password = await vscode.window.showInputBox({
-                prompt: `File is locked. Enter password to unlock and edit '${path.basename(docPath)}'`,
+                prompt: isFolderLock 
+                   ? `Parent folder '${targetName}' is locked. Enter password to unlock and edit '${path.basename(docPath)}'`
+                   : `File is locked. Enter password to unlock and edit '${targetName}'`,
                 password: true,
                 ignoreFocusOut: true
             });
 
             if (password) {
                 try {
-                    await unlockFile(docPath, password, logger);
-                    vscode.window.showInformationMessage("File unlocked. You can now edit.");
-                    // We might need to "Redo" if we want to apply their keystroke? 
-                    // No, cleaner to just let them type again.
+                    await unlockFile(targetPath, password, logger);
+                    vscode.window.showInformationMessage("Unlocked successfully. You can now edit.");
                 } catch (err: any) {
                     vscode.window.showErrorMessage(`Unlock failed: ${err.message}`);
                 }
@@ -108,31 +110,57 @@ export function activate(context: vscode.ExtensionContext) {
     activateGuardian(context);
 }
 
+async function findAssociatedLockFile(filePath: string): Promise<{ targetPath: string, lockFilePath: string } | null> {
+    let currentPath = filePath;
+
+    while (true) {
+        const lockPath = `${currentPath}.obscuro-lock`;
+        if (fs.existsSync(lockPath)) {
+            return { targetPath: currentPath, lockFilePath: lockPath };
+        }
+        
+        const parentPath = path.dirname(currentPath);
+        if (parentPath === currentPath) {
+            // Reached root
+            break;
+        }
+        currentPath = parentPath;
+    }
+
+    return null;
+}
+
 // GUARDIAN MODE
 function activateGuardian(context: vscode.ExtensionContext) {
     const watcher = vscode.workspace.createFileSystemWatcher('**/*');
 
     // Helper to check if file is locked and valid
     const isLockedAndModified = async (filePath: string) => {
-        const lockFilePath = `${filePath}.obscuro-lock`;
-        if (fs.existsSync(lockFilePath)) {
-            // It has a lock file.
-            // Check if it's currently being unlocked? (We don't have state for that, but unlock deletes lock file first usually? 
-            // actually unlockFile deletes lock file LAST.
-            // But if specific Obscuro command is running, we might want to ignore?
-            // For now, assume any change not via our commands needs verify.
+        const lockInfo = await findAssociatedLockFile(filePath);
+        if (lockInfo) {
+            const { lockFilePath } = lockInfo;
+            // It is protected by a lock (either directly or via parent folder).
 
             try {
                 // Verify integrity
                 const currentContent = fs.existsSync(filePath) ? await fs.promises.readFile(filePath, 'utf8') : null;
-                const lockContent = await fs.promises.readFile(lockFilePath, 'utf8');
 
                 // We can't verify hash without password (metadata is encrypted).
                 // BUT we can check if content is still encrypted string?
                 // If user replaced with "hello", it won't start with OBSCURO.
+                // Note: For plaintext locks, this might inadvertently trigger if guardian mode fires, 
+                // but read-only flags usually prevent modification anyway.
 
-                if (currentContent && !currentContent.startsWith("OBSCURO:")) {
+                if (currentContent && !currentContent.startsWith("OBSCURO:") && !currentContent.includes("OBSCURO:")) {
                     // Unauthorized modification!
+                    // To avoid false positives on plaintext locked files, we really should read metadata,
+                    // but we don't have password. For now, rely on OS read-only flags for plaintext.
+                    // If it was encrypted, and now it's not, we revert.
+                    
+                    // Actually, if it's plaintext locked, `currentContent` NEVER started with OBSCURO:.
+                    // So if it was modified, we'll think it's tampered. But `watcher.onDidChange` only triggers on actual edits.
+                    // Let's assume Guardian Mode mainly protects encrypted files from being replaced with plaintext.
+                    
                     // Trigger Revert.
                     return true;
                 }

@@ -206,26 +206,33 @@ export async function unlockFile(targetPath: string, password: string, logger: I
         throw new Error("Invalid password (token mismatch)."); // Shouldn't happen if decryption succeeded
     }
 
+    const isEncrypted = metadata.isEncrypted ?? true;
+    const isDirectory = metadata.isDirectory ?? false;
+
     // 2. Integrity Check
-    if (metadata.hash) {
-        const currentHash = await calculateFileHash(targetPath);
-        if (currentHash !== metadata.hash) {
-            throw new Error("Integrity check failed! The item has been externally modified.");
+    if (metadata.hash && metadata.hash !== "DIR_NO_HASH") {
+        if (!isDirectory || isEncrypted) {
+            const currentHash = await calculateFileHash(targetPath);
+            if (currentHash !== metadata.hash) {
+                throw new Error("Integrity check failed! The item has been externally modified.");
+            }
         }
     }
 
     // 3. Remove Flags
     try {
-        await execAsync(`chflags nouchg "${targetPath}"`).catch(() => { }); // might not exist on all OS
-        await execAsync(`chmod u+w "${targetPath}"`).catch(() => { });
+        if (isDirectory && !isEncrypted) {
+            await removeReadOnlyRecursive(targetPath, logger);
+        } else {
+            await execAsync(`chflags nouchg "${targetPath}"`).catch(() => { }); // might not exist on all OS
+            await execAsync(`chmod u+w "${targetPath}"`).catch(() => { });
+        }
     } catch (error: any) {
         logger.log(`Warning: Failed to remove read-only flag: ${error.message}`);
     }
 
     // 4. Decrypt Content
     try {
-        const isEncrypted = metadata.isEncrypted ?? true;
-        const isDirectory = metadata.isDirectory ?? false;
 
         if (isEncrypted) {
             // Check header to see if it is Legacy (OBSCURO:) or Streaming (Binary)
@@ -366,5 +373,21 @@ async function setReadOnlyRecursive(target: string, logger: ILogger) {
         await execAsync(`chflags uchg "${target}"`).catch(e => logger.log(`Warning: Failed to set chflags on ${target}: ${e.message}`));
     } catch (e: any) {
         logger.log(`Failed to make ${target} read-only: ${e.message}`);
+    }
+}
+
+async function removeReadOnlyRecursive(target: string, logger: ILogger) {
+    try {
+        const stats = await fs.promises.stat(target);
+        if (stats.isDirectory()) {
+            const files = await fs.promises.readdir(target);
+            for (const file of files) {
+                await removeReadOnlyRecursive(path.join(target, file), logger);
+            }
+        }
+        await execAsync(`chflags nouchg "${target}"`).catch(() => { });
+        await execAsync(`chmod u+w "${target}"`).catch(() => { });
+    } catch (e: any) {
+        logger.log(`Warning: Failed to remove read-only flag on ${target}: ${e.message}`);
     }
 }
