@@ -6,26 +6,14 @@ import * as crypto from 'crypto';
 import * as tar from 'tar';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { encryptData, decryptData, decryptString } from './crypto_string';
+import { encryptData, decryptData } from './crypto_string';
 import { ILogger, LockMetadata } from './types';
 import { Readable } from 'stream';
 
 const execAsync = promisify(exec);
 const VERIFICATION_TOKEN = "VERIFIED_OBSCURO_LOCK";
 
-// Helper to stream tar to buffer
-async function createTarBuffer(cwd: string, target: string): Promise<Buffer> {
-    const stream = tar.c({
-        cwd: cwd,
-        gzip: false
-    }, [target]);
 
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-        chunks.push(Buffer.from(chunk));
-    }
-    return Buffer.concat(chunks);
-}
 
 // Helper to extract tar buffer
 async function extractTarBuffer(buffer: Buffer, cwd: string): Promise<void> {
@@ -44,34 +32,7 @@ async function extractTarBuffer(buffer: Buffer, cwd: string): Promise<void> {
     });
 }
 
-// Helper to stream tar directly to output
-async function pipeTarToStream(cwd: string, target: string, outputStream: NodeJS.WritableStream): Promise<void> {
-    const tarStream = tar.c({
-        cwd: cwd,
-        gzip: false
-    }, [target]);
 
-    return new Promise((resolve, reject) => {
-        tarStream.pipe(outputStream);
-        tarStream.on('end', resolve);
-        tarStream.on('error', reject);
-        outputStream.on('error', reject);
-    });
-}
-
-// Helper to extract tar stream
-async function extractTarStream(inputStream: NodeJS.ReadableStream, cwd: string): Promise<void> {
-    const extract = tar.x({
-        cwd: cwd
-    });
-
-    return new Promise((resolve, reject) => {
-        inputStream.pipe(extract)
-            .on('finish', resolve)
-            .on('error', reject);
-        inputStream.on('error', reject);
-    });
-}
 
 export async function lockFile(targetPath: string, password: string, logger: ILogger, options: { encrypt: boolean } = { encrypt: true }) {
     logger.log(`Locking (${options.encrypt ? 'Secure Encrypted' : 'Plaintext Read-Only'}): ${targetPath}`);
@@ -290,22 +251,37 @@ export async function unlockFile(targetPath: string, password: string, logger: I
                     const tempTar = `${targetPath}.tar`;
                     const output = fs.createWriteStream(tempTar);
 
-                    await import('./crypto_string').then(m => m.decryptStream(input, output, password));
+                    try {
+                        await import('./crypto_string').then(m => m.decryptStream(input, output, password));
 
-                    // Now extract tar
-                    await fs.promises.unlink(targetPath); // Remove encrypted file
+                        // Extract tar BEFORE deleting the encrypted source
+                        await tar.x({ file: tempTar, cwd: targetDir });
 
-                    // Extract
-                    await tar.x({ file: tempTar, cwd: targetDir });
+                        // Only delete the encrypted file AFTER successful extraction
+                        await fs.promises.unlink(targetPath);
 
-                    await fs.promises.unlink(tempTar);
+                        await fs.promises.unlink(tempTar);
+                    } catch (extractErr: any) {
+                        // Clean up temp tar but keep the encrypted file safe
+                        if (fs.existsSync(tempTar)) {
+                            await fs.promises.unlink(tempTar).catch(() => { });
+                        }
+                        throw extractErr;
+                    }
 
                 } else {
                     // File: Decrypt Stream -> File Stream (temp) -> Rename
                     const output = fs.createWriteStream(tempDecryptedPath);
-                    await import('./crypto_string').then(m => m.decryptStream(input, output, password));
-
-                    await fs.promises.rename(tempDecryptedPath, targetPath);
+                    try {
+                        await import('./crypto_string').then(m => m.decryptStream(input, output, password));
+                        await fs.promises.rename(tempDecryptedPath, targetPath);
+                    } catch (fileErr: any) {
+                        // Clean up temp file but keep the encrypted file safe
+                        if (fs.existsSync(tempDecryptedPath)) {
+                            await fs.promises.unlink(tempDecryptedPath).catch(() => { });
+                        }
+                        throw fileErr;
+                    }
                 }
             }
         }

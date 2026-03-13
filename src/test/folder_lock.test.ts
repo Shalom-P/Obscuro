@@ -92,7 +92,7 @@ async function runTests() {
         // Check content
         // Check content
         const lockedBuffer = fs.readFileSync(binFile);
-        const lockedHeader = lockedBuffer.subarray(0, 8).toString();
+
         // Just verify it's encrypted (content changed)
         assert.notDeepStrictEqual(lockedBuffer, binData, "File content should be encrypted (different from original)");
 

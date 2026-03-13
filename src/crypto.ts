@@ -82,7 +82,7 @@ export async function encryptFile(targetPath: string, sourceFile: string, passwo
     }
 }
 
-export async function decryptFile(filePath: string, password: string, logger: ILogger, cleanupCallback?: (originalPath: string) => void) {
+export async function decryptFile(filePath: string, password: string, _logger: ILogger, cleanupCallback?: (originalPath: string) => void) {
     // Read header (Salt + IV + Tag) = 44 bytes
     const fd = await fs.promises.open(filePath, 'r');
     const header = Buffer.alloc(44);

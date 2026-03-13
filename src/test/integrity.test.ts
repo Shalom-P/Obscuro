@@ -68,7 +68,7 @@ async function runTests() {
             console.error('  FAIL: Should have detected tampering!');
             process.exit(1);
         } catch (e: any) {
-            if (e.message.includes('integrity check failed')) {
+            if (e.message.toLowerCase().includes('integrity check failed')) {
                 console.log('  PASS (Caught tampering)');
             } else {
                 console.error('  FAIL: Unexpected error:', e.message);

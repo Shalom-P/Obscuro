@@ -12,6 +12,7 @@ const secrets_1 = require("./secrets");
 const fs = require("fs");
 let outputChannel;
 let logger;
+let isUnlocking = false; // Suppresses Guardian Mode during unlock/extraction
 function activate(context) {
     console.log('Obscuro extension is now active!');
     // Create output channel
@@ -70,7 +71,7 @@ function activate(context) {
         const docPath = e.document.uri.fsPath;
         const lockInfo = await findAssociatedLockFile(docPath);
         if (lockInfo) {
-            const { targetPath, lockFilePath } = lockInfo;
+            const { targetPath } = lockInfo;
             // File or parent folder is locked. Revert change immediately.
             await vscode.commands.executeCommand('undo');
             const targetName = path.basename(targetPath);
@@ -84,11 +85,15 @@ function activate(context) {
             });
             if (password) {
                 try {
+                    isUnlocking = true; // Suppress Guardian during extraction
                     await (0, lock_1.unlockFile)(targetPath, password, logger);
                     vscode.window.showInformationMessage("Unlocked successfully. You can now edit.");
                 }
                 catch (err) {
                     vscode.window.showErrorMessage(`Unlock failed: ${err.message}`);
+                }
+                finally {
+                    isUnlocking = false;
                 }
             }
         }
@@ -119,7 +124,6 @@ function activateGuardian(context) {
     const isLockedAndModified = async (filePath) => {
         const lockInfo = await findAssociatedLockFile(filePath);
         if (lockInfo) {
-            const { lockFilePath } = lockInfo;
             // It is protected by a lock (either directly or via parent folder).
             try {
                 // Verify integrity
@@ -149,7 +153,6 @@ function activateGuardian(context) {
     };
     // Revert Action
     const revertFile = async (filePath) => {
-        const lockFilePath = `${filePath}.obscuro-lock`;
         try {
             // We need to restore the encrypted content.
             // Issue: We can't decrypt metadata without password to get `encryptedContent`.
@@ -200,6 +203,8 @@ function activateGuardian(context) {
         }
     };
     watcher.onDidChange(async (uri) => {
+        if (isUnlocking)
+            return; // Skip during unlock/extraction
         if (uri.path.endsWith('.obscuro-lock'))
             return; // Ignore lock file changes
         if (await isLockedAndModified(uri.fsPath)) {
@@ -207,6 +212,8 @@ function activateGuardian(context) {
         }
     });
     watcher.onDidCreate(async (uri) => {
+        if (isUnlocking)
+            return; // Skip during unlock/extraction
         if (uri.path.endsWith('.obscuro-lock'))
             return;
         if (await isLockedAndModified(uri.fsPath)) {
@@ -266,7 +273,7 @@ async function handleObscure(targetPath, action, secretManager) {
         location: vscode.ProgressLocation.Notification,
         title: `Obscuro: ${action === 'encrypt' ? 'Encrypting' : 'Decrypting'}...`,
         cancellable: false
-    }, async (progress) => {
+    }, async () => {
         try {
             if (action === 'encrypt') {
                 await performEncryption(targetPath, password);
@@ -366,7 +373,7 @@ async function handleSelectionObscure(action) {
         vscode.window.showErrorMessage(`Obscuro Selection failed: ${err.message}`);
     }
 }
-async function handleLock(targetPath, action, secretManager, options = { encrypt: true }) {
+async function handleLock(targetPath, action, _secretManager, options = { encrypt: true }) {
     let password;
     // Always prompt for password on unlock (User request)
     // if (action === 'unlock') {
@@ -404,7 +411,7 @@ async function handleLock(targetPath, action, secretManager, options = { encrypt
         location: vscode.ProgressLocation.Notification,
         title: `Obscuro: ${action === 'lock' ? 'Locking ' + (options.encrypt ? '(Encrypted)' : '(Plaintext)') : 'Unlocking'}...`,
         cancellable: false
-    }, async (progress) => {
+    }, async () => {
         try {
             if (action === 'lock') {
                 await (0, lock_1.lockFile)(targetPath, password, logger, options);
@@ -413,6 +420,7 @@ async function handleLock(targetPath, action, secretManager, options = { encrypt
             }
             else {
                 try {
+                    isUnlocking = true; // Suppress Guardian during extraction
                     await (0, lock_1.unlockFile)(targetPath, password, logger);
                     vscode.window.showInformationMessage("Unlocked successfully!");
                 }
@@ -425,6 +433,9 @@ async function handleLock(targetPath, action, secretManager, options = { encrypt
                     // Since we didn't fetch `stored`, this check will fail (or we need to fetch it just for comparison?)
                     // If we didn't use stored password, we just fail and expected user to try again.
                     throw err;
+                }
+                finally {
+                    isUnlocking = false;
                 }
             }
         }
