@@ -108,6 +108,15 @@ export async function lockFile(targetPath: string, password: string, logger: ILo
         };
         const encryptedMetadata = await encryptData(JSON.stringify(metadata), password);
 
+        // V2 Wrap
+        const v2LockData = {
+            version: 2,
+            payload: encryptedMetadata,
+            hash: finalHash,
+            isEncrypted: options.encrypt,
+            isDirectory: isDirectory
+        };
+
         // 5. Commit Changes
         if (options.encrypt) {
             // Replace original with encrypted
@@ -120,7 +129,7 @@ export async function lockFile(targetPath: string, password: string, logger: ILo
         }
 
         // 6. Write Metadata
-        await fs.promises.writeFile(lockFilePath, encryptedMetadata, 'utf8');
+        await fs.promises.writeFile(lockFilePath, JSON.stringify(v2LockData), 'utf8');
 
         // 7. Permission Flags
         if (!isDirectory || options.encrypt) {
@@ -153,7 +162,18 @@ export async function unlockFile(targetPath: string, password: string, logger: I
     // 1. Read Metadata
     let metadata: LockMetadata;
     try {
-        const encryptedMetadata = await fs.promises.readFile(lockFilePath, 'utf8');
+        const lockFileContent = await fs.promises.readFile(lockFilePath, 'utf8');
+        let encryptedMetadata: string;
+        
+        if (lockFileContent.trim().startsWith('{')) {
+            // V2 Format
+            const v2Data = JSON.parse(lockFileContent);
+            encryptedMetadata = v2Data.payload;
+        } else {
+            // V1 Format (Legacy)
+            encryptedMetadata = lockFileContent;
+        }
+
         const decryptedMetadataBuffer = await decryptData(encryptedMetadata, password);
         metadata = JSON.parse(decryptedMetadataBuffer.toString('utf8'));
     } catch (e: any) {
@@ -173,10 +193,25 @@ export async function unlockFile(targetPath: string, password: string, logger: I
     // 2. Integrity Check
     if (metadata.hash && metadata.hash !== "DIR_NO_HASH") {
         if (!isDirectory || isEncrypted) {
-            const currentHash = await calculateFileHash(targetPath);
-            if (currentHash !== metadata.hash) {
-                throw new Error("Integrity check failed! The item has been externally modified.");
+            try {
+                const currentHash = await calculateFileHash(targetPath);
+                if (currentHash !== metadata.hash) {
+                    throw new Error("Integrity check failed! The item has been externally modified.");
+                }
+            } catch (hashError: any) {
+                if (hashError.code === 'ENOENT') {
+                    // Try to clean up lock file since target is gone
+                    await fs.promises.unlink(lockFilePath).catch(() => {});
+                    throw new Error("Target item is missing. Lock file has been cleaned up.");
+                }
+                throw hashError;
             }
+        }
+    } else {
+        // Plain directory missing check
+        if (!fs.existsSync(targetPath)) {
+            await fs.promises.unlink(lockFilePath).catch(() => {});
+            throw new Error("Target directory is missing. Lock file has been cleaned up.");
         }
     }
 
@@ -254,17 +289,29 @@ export async function unlockFile(targetPath: string, password: string, logger: I
                     try {
                         await import('./crypto_string').then(m => m.decryptStream(input, output, password));
 
-                        // Extract tar BEFORE deleting the encrypted source
-                        await tar.x({ file: tempTar, cwd: targetDir });
+                        // Rename targetPath first so tar.x doesn't overwrite it
+                        const backupEncryptedPath = `${targetPath}.bak`;
+                        await fs.promises.rename(targetPath, backupEncryptedPath);
 
-                        // Only delete the encrypted file AFTER successful extraction
-                        await fs.promises.unlink(targetPath);
+                        try {
+                            await tar.x({ file: tempTar, cwd: targetDir });
+                        } catch (err: any) {
+                            // Restore on failure
+                            await fs.promises.rename(backupEncryptedPath, targetPath);
+                            throw err;
+                        }
 
+                        // Extraction successful, delete the backup and the temp tar
+                        await fs.promises.unlink(backupEncryptedPath);
                         await fs.promises.unlink(tempTar);
                     } catch (extractErr: any) {
-                        // Clean up temp tar but keep the encrypted file safe
+                        // Clean up temp tar
                         if (fs.existsSync(tempTar)) {
                             await fs.promises.unlink(tempTar).catch(() => { });
+                        }
+                        // Restore backup if exists and extraction failed
+                        if (fs.existsSync(`${targetPath}.bak`)) {
+                            await fs.promises.rename(`${targetPath}.bak`, targetPath).catch(() => {});
                         }
                         throw extractErr;
                     }

@@ -126,23 +126,24 @@ function activateGuardian(context) {
         if (lockInfo) {
             // It is protected by a lock (either directly or via parent folder).
             try {
-                // Verify integrity
-                const currentContent = fs.existsSync(filePath) ? await fs.promises.readFile(filePath, 'utf8') : null;
-                // We can't verify hash without password (metadata is encrypted).
-                // BUT we can check if content is still encrypted string?
-                // If user replaced with "hello", it won't start with OBSCURO.
-                // Note: For plaintext locks, this might inadvertently trigger if guardian mode fires, 
-                // but read-only flags usually prevent modification anyway.
-                if (currentContent && !currentContent.startsWith("OBSCURO:") && !currentContent.includes("OBSCURO:")) {
-                    // Unauthorized modification!
-                    // To avoid false positives on plaintext locked files, we really should read metadata,
-                    // but we don't have password. For now, rely on OS read-only flags for plaintext.
-                    // If it was encrypted, and now it's not, we revert.
-                    // Actually, if it's plaintext locked, `currentContent` NEVER started with OBSCURO:.
-                    // So if it was modified, we'll think it's tampered. But `watcher.onDidChange` only triggers on actual edits.
-                    // Let's assume Guardian Mode mainly protects encrypted files from being replaced with plaintext.
-                    // Trigger Revert.
-                    return true;
+                if (!fs.existsSync(filePath))
+                    return false;
+                const lockFileContent = await fs.promises.readFile(lockInfo.lockFilePath, 'utf8');
+                let isLegacyEncrypted = false;
+                if (lockFileContent.trim().startsWith('{')) {
+                    // V2 Lock files handle both streaming binary and plaintext. 
+                    // To avoid severe performance hits hashing every file on keystrokes, 
+                    // we rely on OS locks (chmod/chflags) and skip Guardian Mode for V2 entirely.
+                    return false;
+                }
+                else {
+                    isLegacyEncrypted = true;
+                }
+                if (isLegacyEncrypted) {
+                    const currentContent = await fs.promises.readFile(filePath, 'utf8');
+                    if (!currentContent.startsWith("OBSCURO:") && !currentContent.includes("OBSCURO:")) {
+                        return true;
+                    }
                 }
             }
             catch (e) {
@@ -193,9 +194,9 @@ function activateGuardian(context) {
             // I will implement "Delete on Tamper" for now as it satisfies "cannot edit".
             // If they edit it, it vanishes.
             // Then they have to Unlock (provide password) to restore it (from backup in metadata).
-            vscode.window.showErrorMessage(`Obscuro Guardian: Unauthorized modification detected in '${path.basename(filePath)}'. File removed.`);
-            logger.log(`Guardian: detected tamper in ${filePath}. Removing...`);
-            await fs.promises.unlink(filePath);
+            vscode.window.showErrorMessage(`Obscuro Guardian: Unauthorized modification detected in '${path.basename(filePath)}'. Lock integrity compromised.`);
+            logger.log(`Guardian: detected tamper in ${filePath}. Warning user.`);
+            // DO NOT auto-delete the file to prevent catastrophic data loss from Guardian false positives.
             // Re-lock (set flags on empty/missing?)
         }
         catch (e) {
